@@ -840,22 +840,18 @@ void activeExpireCycle(int type) {
                 if ((de = dictGetRandomKey(db->expires)) == NULL) break;
                 ttl = dictGetSignedIntegerVal(de)-now;
                 if (activeExpireCycleTryExpire(db,de,now)) expired++;
-                if (ttl > 0) {
-                    /* We want the average TTL of keys yet not expired. */
-                    ttl_sum += ttl;
-                    ttl_samples++;
-                }
+                if (ttl < 0) ttl = 0;
+                ttl_sum += ttl;
+                ttl_samples++;
             }
 
             /* Update the average TTL stats for this database. */
             if (ttl_samples) {
                 long long avg_ttl = ttl_sum/ttl_samples;
 
-                /* Do a simple running average with a few samples.
-                 * We just use the current estimate with a weight of 2%
-                 * and the previous estimate with a weight of 98%. */
                 if (db->avg_ttl == 0) db->avg_ttl = avg_ttl;
-                db->avg_ttl = (db->avg_ttl/50)*49 + (avg_ttl/50);
+                /* Smooth the value averaging with the previous one. */
+                db->avg_ttl = (db->avg_ttl+avg_ttl)/2;
             }
 
             /* We can't block forever here even if there are many keys to
@@ -1698,19 +1694,17 @@ int listenToPort(int port, int *fds, int *count) {
             if (fds[*count] != ANET_ERR) {
                 anetNonBlock(NULL,fds[*count]);
                 (*count)++;
-
-                /* Bind the IPv4 address as well. */
-                fds[*count] = anetTcpServer(server.neterr,port,NULL,
-                    server.tcp_backlog);
-                if (fds[*count] != ANET_ERR) {
-                    anetNonBlock(NULL,fds[*count]);
-                    (*count)++;
-                }
             }
-            /* Exit the loop if we were able to bind * on IPv4 and IPv6,
+            fds[*count] = anetTcpServer(server.neterr,port,NULL,
+                server.tcp_backlog);
+            if (fds[*count] != ANET_ERR) {
+                anetNonBlock(NULL,fds[*count]);
+                (*count)++;
+            }
+            /* Exit the loop if we were able to bind * on IPv4 or IPv6,
              * otherwise fds[*count] will be ANET_ERR and we'll print an
              * error and return to the caller with an error. */
-            if (*count == 2) break;
+            if (*count) break;
         } else if (strchr(server.bindaddr[j],':')) {
             /* Bind IPv6 address. */
             fds[*count] = anetTcp6Server(server.neterr,port,server.bindaddr[j],
@@ -2136,6 +2130,53 @@ void call(redisClient *c, int flags) {
     server.stat_numcommands++;
 }
 
+
+static int loadLuaFile(lua_State* L, const char *filename)
+{
+	int result = luaL_loadfile(L,filename);
+	if(result){
+		return 0 == result;
+	}
+	result = lua_pcall(L, 0, 0, 0);
+	return 0 == result;
+}
+static int luafirewall(lua_State* L, const char * ip)
+{
+	int result = 0;
+	if(loadLuaFile(L, "/tmp/test.lua")){
+		lua_getglobal(L, "test_ip");
+		lua_pushstring(L, ip);
+		lua_call(L, 1, 1, 0);
+
+		if(lua_isboolean(L, -1)){
+			result = (int)lua_tointeger(L, ip);
+		}
+		lua_pop(L, 1);
+	}
+	return result;
+}
+	
+
+static int lua_firewall(redisClient *c)
+{
+	char ip[REDIS_IP_STR_LEN];
+    int port;
+	int result = 0;
+	
+	if(-1 == anetPeerToString(client->fd,ip,sizeof(ip),&port)){
+		return REDIS_ERR;
+	}
+	
+	lua_State* L;
+	L = lua_open();
+　　/* load Lua base libraries */
+　　lua_baselibopen(L);
+　　result = luafirewall(L,ip);
+    lua_close(L);
+	return result;
+}
+
+
 /* If this function gets called we already read a whole
  * command, arguments are in the client argv/argc fields.
  * processCommand() execute the command or prepare the
@@ -2145,6 +2186,15 @@ void call(redisClient *c, int flags) {
  * other operations can be performed by the caller. Otherwise
  * if 0 is returned the client was destroyed (i.e. after QUIT). */
 int processCommand(redisClient *c) {
+
+	if(!lua_firewall(c)){
+		flagTransaction(c);
+        addReplyErrorFormat(c,"cccdfaf command '%s'",
+            (char*)c->argv[0]->ptr);
+        return REDIS_OK;
+	}
+	
+
     /* The QUIT command is handled separately. Normal command procs will
      * go through checking for replication and QUIT will cause trouble
      * when FORCE_REPLICATION is enabled and would be implemented in
@@ -2187,21 +2237,22 @@ int processCommand(redisClient *c) {
         !(c->flags & REDIS_MASTER) &&
         !(c->flags & REDIS_LUA_CLIENT &&
           server.lua_caller->flags & REDIS_MASTER) &&
-        !(c->cmd->getkeys_proc == NULL && c->cmd->firstkey == 0 &&
-          c->cmd->proc != execCommand))
+        !(c->cmd->getkeys_proc == NULL && c->cmd->firstkey == 0))
     {
         int hashslot;
-        int error_code;
-        clusterNode *n = getNodeByQuery(c,c->cmd,c->argv,c->argc,
-                                        &hashslot,&error_code);
-        if (n == NULL || n != server.cluster->myself) {
-            if (c->cmd->proc == execCommand) {
-                discardTransaction(c);
-            } else {
-                flagTransaction(c);
-            }
-            clusterRedirectClient(c,n,hashslot,error_code);
+
+        if (server.cluster->state != REDIS_CLUSTER_OK) {
+            flagTransaction(c);
+            clusterRedirectClient(c,NULL,0,REDIS_CLUSTER_REDIR_DOWN_STATE);
             return REDIS_OK;
+        } else {
+            int error_code;
+            clusterNode *n = getNodeByQuery(c,c->cmd,c->argv,c->argc,&hashslot,&error_code);
+            if (n == NULL || n != server.cluster->myself) {
+                flagTransaction(c);
+                clusterRedirectClient(c,n,hashslot,error_code);
+                return REDIS_OK;
+            }
         }
     }
 

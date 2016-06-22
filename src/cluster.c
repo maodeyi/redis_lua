@@ -531,7 +531,6 @@ void clusterReset(int hard) {
         sdsfree(oldname);
         getRandomHexChars(myself->name, REDIS_CLUSTER_NAMELEN);
         clusterAddNode(myself);
-        redisLog(REDIS_NOTICE,"Node hard reset, now I'm %.40s", myself->name);
     }
 
     /* Make sure to persist the new config and update the state. */
@@ -1331,19 +1330,14 @@ void clusterProcessGossipSection(clusterMsg *hdr, clusterLink *link) {
             }
 
             /* If we already know this node, but it is not reachable, and
-             * we see a different address in the gossip section of a node that
-             * can talk with this other node, update the address, disconnect
-             * the old link if any, so that we'll attempt to connect with the
-             * new address. */
+             * we see a different address in the gossip section, start an
+             * handshake with the (possibly) new address: this will result
+             * into a node address update if the handshake will be
+             * successful. */
             if (node->flags & (REDIS_NODE_FAIL|REDIS_NODE_PFAIL) &&
-                !(flags & REDIS_NODE_NOADDR) &&
-                !(flags & (REDIS_NODE_FAIL|REDIS_NODE_PFAIL)) &&
                 (strcasecmp(node->ip,g->ip) || node->port != ntohs(g->port)))
             {
-                if (node->link) freeClusterLink(node->link);
-                memcpy(node->ip,g->ip,REDIS_IP_STR_LEN);
-                node->port = ntohs(g->port);
-                node->flags &= ~REDIS_NODE_NOADDR;
+                clusterStartHandshake(g->ip,ntohs(g->port));
             }
         } else {
             /* If it's not in NOADDR state and we don't have it, we
@@ -1721,10 +1715,7 @@ int clusterProcessPacket(clusterLink *link) {
                 /* If the reply has a non matching node ID we
                  * disconnect this node and set it as not having an associated
                  * address. */
-                redisLog(REDIS_DEBUG,"PONG contains mismatching sender ID. About node %.40s added %d ms ago, having flags %d",
-                    link->node->name,
-                    (int)(mstime()-(link->node->ctime)),
-                    link->node->flags);
+                redisLog(REDIS_DEBUG,"PONG contains mismatching sender ID");
                 link->node->flags |= REDIS_NODE_NOADDR;
                 link->node->ip[0] = '\0';
                 link->node->port = 0;
@@ -3356,45 +3347,11 @@ void bitmapClearBit(unsigned char *bitmap, int pos) {
     bitmap[byte] &= ~(1<<bit);
 }
 
-/* Return non-zero if there is at least one master with slaves in the cluster.
- * Otherwise zero is returned. Used by clusterNodeSetSlotBit() to set the
- * MIGRATE_TO flag the when a master gets the first slot. */
-int clusterMastersHaveSlaves(void) {
-    dictIterator *di = dictGetSafeIterator(server.cluster->nodes);
-    dictEntry *de;
-    int slaves = 0;
-    while((de = dictNext(di)) != NULL) {
-        clusterNode *node = dictGetVal(de);
-
-        if (nodeIsSlave(node)) continue;
-        slaves += node->numslaves;
-    }
-    dictReleaseIterator(di);
-    return slaves != 0;
-}
-
 /* Set the slot bit and return the old value. */
 int clusterNodeSetSlotBit(clusterNode *n, int slot) {
     int old = bitmapTestBit(n->slots,slot);
     bitmapSetBit(n->slots,slot);
-    if (!old) {
-        n->numslots++;
-        /* When a master gets its first slot, even if it has no slaves,
-         * it gets flagged with MIGRATE_TO, that is, the master is a valid
-         * target for replicas migration, if and only if at least one of
-         * the other masters has slaves right now.
-         *
-         * Normally masters are valid targerts of replica migration if:
-         * 1. The used to have slaves (but no longer have).
-         * 2. They are slaves failing over a master that used to have slaves.
-         *
-         * However new masters with slots assigned are considered valid
-         * migration tagets if the rest of the cluster is not a slave-less.
-         *
-         * See https://github.com/antirez/redis/issues/3043 for more info. */
-        if (n->numslots == 1 && clusterMastersHaveSlaves())
-            n->flags |= REDIS_NODE_MIGRATE_TO;
-    }
+    if (!old) n->numslots++;
     return old;
 }
 
@@ -3808,10 +3765,8 @@ void clusterReplyMultiBulkSlots(redisClient *c) {
      *            2) end slot
      *            3) 1) master IP
      *               2) master port
-     *               3) node ID
      *            4) 1) replica IP
      *               2) replica port
-     *               3) node ID
      *           ... continued until done
      */
 
@@ -3852,20 +3807,18 @@ void clusterReplyMultiBulkSlots(redisClient *c) {
                 start = -1;
 
                 /* First node reply position is always the master */
-                addReplyMultiBulkLen(c, 3);
+                addReplyMultiBulkLen(c, 2);
                 addReplyBulkCString(c, node->ip);
                 addReplyLongLong(c, node->port);
-                addReplyBulkCBuffer(c, node->name, REDIS_CLUSTER_NAMELEN);
 
                 /* Remaining nodes in reply are replicas for slot range */
                 for (i = 0; i < node->numslaves; i++) {
                     /* This loop is copy/pasted from clusterGenNodeDescription()
                      * with modifications for per-slot node aggregation */
                     if (nodeFailed(node->slaves[i])) continue;
-                    addReplyMultiBulkLen(c, 3);
+                    addReplyMultiBulkLen(c, 2);
                     addReplyBulkCString(c, node->slaves[i]->ip);
                     addReplyLongLong(c, node->slaves[i]->port);
-                    addReplyBulkCBuffer(c, node->slaves[i]->name, REDIS_CLUSTER_NAMELEN);
                     nested_elements++;
                 }
                 setDeferredMultiBulkLength(c, nested_replylen, nested_elements);
@@ -4967,10 +4920,7 @@ void readwriteCommand(redisClient *c) {
  * REDIS_CLUSTER_REDIR_DOWN_UNBOUND if the request addresses a slot which is
  * not bound to any node. In this case the cluster global state should be
  * already "down" but it is fragile to rely on the update of the global state,
- * so we also handle it here.
- *
- * REDIS_CLUSTER_REDIR_DOWN_STATE if the cluster is down but the user attempts
- * to execute a command that addresses one or more keys. */
+ * so we also handle it here. */
 clusterNode *getNodeByQuery(redisClient *c, struct redisCommand *cmd, robj **argv, int argc, int *hashslot, int *error_code) {
     clusterNode *n = NULL;
     robj *firstkey = NULL;
@@ -5077,14 +5027,8 @@ clusterNode *getNodeByQuery(redisClient *c, struct redisCommand *cmd, robj **arg
     }
 
     /* No key at all in command? then we can serve the request
-     * without redirections or errors in all the cases. */
+     * without redirections or errors. */
     if (n == NULL) return myself;
-
-    /* Cluster is globally down but we got keys? We can't serve the request. */
-    if (server.cluster->state != REDIS_CLUSTER_OK) {
-        if (error_code) *error_code = REDIS_CLUSTER_REDIR_DOWN_STATE;
-        return NULL;
-    }
 
     /* Return the hashslot by reference. */
     if (hashslot) *hashslot = slot;

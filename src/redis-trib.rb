@@ -407,8 +407,7 @@ class RedisTrib
                 cluster_error \
                     "[WARNING] Node #{n} has slots in migrating state (#{n.info[:migrating].keys.join(",")})."
                 open_slots += n.info[:migrating].keys
-            end
-            if n.info[:importing].size > 0
+            elsif n.info[:importing].size > 0
                 cluster_error \
                     "[WARNING] Node #{n} has slots in importing state (#{n.info[:importing].keys.join(",")})."
                 open_slots += n.info[:importing].keys
@@ -568,17 +567,17 @@ class RedisTrib
 
             # Use ADDSLOTS to assign the slot.
             puts "*** Configuring #{owner} as the slot owner"
-            owner.r.cluster("setslot",slot,"stable")
-            owner.r.cluster("addslots",slot)
+            n.r.cluster("setslot",slot,"stable")
+            n.r.cluster("addslot",slot)
             # Make sure this information will propagate. Not strictly needed
             # since there is no past owner, so all the other nodes will accept
             # whatever epoch this node will claim the slot with.
-            owner.r.cluster("bumpepoch")
+            n.r.cluster("bumpepoch")
 
             # Remove the owner from the list of migrating/importing
             # nodes.
-            migrating.delete(owner)
-            importing.delete(owner)
+            migrating.delete(n)
+            importing.delete(n)
         end
 
         # If there are multiple owners of the slot, we need to fix it
