@@ -2133,51 +2133,46 @@ void call(redisClient *c, int flags) {
 
 static int loadLuaFile(lua_State* L, const char *filename)
 {
-	int result = luaL_loadfile(L,filename);
-	if(result){
-		return 0 == result;
-	}
-	result = lua_pcall(L, 0, 0, 0);
-	return 0 == result;
+        int result = luaL_loadfile(L,filename);
+        if(result){
+                return 0 == result;
+        }
+        result = lua_pcall(L, 0, 0, 0);
+        return 0 == result;
 }
 static int luafirewall(lua_State* L, const char * ip)
 {
-	int result = 0;
-	if(loadLuaFile(L, "/tmp/test.lua")){
-		printf("loadLuafile\n");
-		lua_getglobal(L, "test_ip");
-		lua_pushstring(L, ip);
-		lua_call(L, 1, 1);
-		printf("loadLuafile\n");
+        int result = 0;
+        if(loadLuaFile(L, "/tmp/test.lua")){
+                lua_getglobal(L, "test_ip");
+                lua_pushstring(L, ip);
+                lua_call(L, 1, 1);
 
-		if(lua_isboolean(L, -1)){
-			result = (int)lua_tointeger(L, 1);
-			printf("loadLuafile\n");
-		}
-		lua_pop(L, 1);
-	}
-	printf("loadLuafile\n");
-	return result;
+                if(lua_isnumber(L, -1)){
+                        result = (int)lua_tointeger(L,-1);
+                }
+                lua_pop(L, 1);
+        }
+        return result;
 }
-	
 
 static int lua_firewall(redisClient *c)
 {
-	char ip[REDIS_IP_STR_LEN];
+        char ip[REDIS_IP_STR_LEN];
     int port;
-	int result = 0;
-	
-	if(-1 == anetPeerToString(c->fd,ip,sizeof(ip),&port)){
-		return REDIS_ERR;
-	}
-	
-	lua_State* L;
-	L = lua_open();
-	luaopen_base(L);  
-    luaL_openlibs(L);  
-	result = luafirewall(L,ip);
-    lua_close(L);
-	return result;
+        int result = 0;
+
+        if(-1 == anetPeerToString(c->fd,ip,sizeof(ip),&port)){
+                return REDIS_ERR;
+        }
+
+        lua_State* L;
+        L = lua_open();
+        luaopen_base(L);
+        luaL_openlibs(L);
+        result = luafirewall(L,ip);
+        lua_close(L);
+        return result;
 }
 
 
