@@ -2169,7 +2169,8 @@ static int lua_firewall(redisClient *c)
 	
 	lua_State* L;
 	L = lua_open();
-¡¡¡¡luaLoadLibraries(L);
+	luaopen_base(L);  
+    luaL_openlibs(L);  
 	result = luafirewall(L,ip);
     lua_close(L);
 	return result;
