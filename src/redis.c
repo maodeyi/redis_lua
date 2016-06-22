@@ -2163,13 +2163,12 @@ static int lua_firewall(redisClient *c)
     int port;
 	int result = 0;
 	
-	if(-1 == anetPeerToString(client->fd,ip,sizeof(ip),&port)){
+	if(-1 == anetPeerToString(c->fd,ip,sizeof(ip),&port)){
 		return REDIS_ERR;
 	}
 	
 	lua_State* L;
 	L = lua_open();
-　　/* load Lua base libraries */
 　　luaLoadLibraries(L);
 	result = luafirewall(L,ip);
     lua_close(L);
