@@ -2146,10 +2146,10 @@ static int luafirewall(lua_State* L, const char * ip)
 	if(loadLuaFile(L, "/tmp/test.lua")){
 		lua_getglobal(L, "test_ip");
 		lua_pushstring(L, ip);
-		lua_call(L, 1, 1, 0);
+		lua_call(L, 1, 1);
 
 		if(lua_isboolean(L, -1)){
-			result = (int)lua_tointeger(L, ip);
+			result = (int)lua_tointeger(L, 1);
 		}
 		lua_pop(L, 1);
 	}
