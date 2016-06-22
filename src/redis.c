@@ -2144,15 +2144,19 @@ static int luafirewall(lua_State* L, const char * ip)
 {
 	int result = 0;
 	if(loadLuaFile(L, "/tmp/test.lua")){
+		printf("loadLuafile\n");
 		lua_getglobal(L, "test_ip");
 		lua_pushstring(L, ip);
 		lua_call(L, 1, 1);
+		printf("loadLuafile\n");
 
 		if(lua_isboolean(L, -1)){
 			result = (int)lua_tointeger(L, 1);
+			printf("loadLuafile\n");
 		}
 		lua_pop(L, 1);
 	}
+	printf("loadLuafile\n");
 	return result;
 }
 	
