@@ -2130,11 +2130,12 @@ void call(redisClient *c, int flags) {
     server.stat_numcommands++;
 }
 
-
+/*
 static int loadLuaFile(lua_State* L, const char *filename)
 {
         int result = luaL_loadfile(L,filename);
         if(result){
+				
                 return 0 == result;
         }
         result = lua_pcall(L, 0, 0, 0);
@@ -2143,8 +2144,8 @@ static int loadLuaFile(lua_State* L, const char *filename)
 static int luafirewall(lua_State* L, const char * ip)
 {
         int result = 0;
-        if(loadLuaFile(L, "/tmp/test.lua")){
-                lua_getglobal(L, "test_ip");
+        if(loadLuaFile(L, "/tmp/firewall.lua")){
+                lua_getglobal(L, "firewall");
                 lua_pushstring(L, ip);
                 lua_call(L, 1, 1);
 
@@ -2158,23 +2159,23 @@ static int luafirewall(lua_State* L, const char * ip)
 
 static int lua_firewall(redisClient *c)
 {
-        char ip[REDIS_IP_STR_LEN];
-    int port;
-        int result = 0;
+    char ip[REDIS_IP_STR_LEN];
+		int port;
+    int result = 0;
 
-        if(-1 == anetPeerToString(c->fd,ip,sizeof(ip),&port)){
-                return REDIS_ERR;
-        }
+    if(-1 == anetPeerToString(c->fd,ip,sizeof(ip),&port)){
+        return REDIS_ERR;
+    }
 
-        lua_State* L;
-        L = lua_open();
-        luaopen_base(L);
-        luaL_openlibs(L);
-        result = luafirewall(L,ip);
-        lua_close(L);
-        return result;
+    lua_State* L;
+    L = lua_open();
+    luaopen_base(L);
+    luaL_openlibs(L);
+    result = luafirewall(L,ip);
+    lua_close(L);
+    return result;
 }
-
+*/
 
 /* If this function gets called we already read a whole
  * command, arguments are in the client argv/argc fields.
@@ -2186,7 +2187,7 @@ static int lua_firewall(redisClient *c)
  * if 0 is returned the client was destroyed (i.e. after QUIT). */
 int processCommand(redisClient *c) {
 
-	if(!lua_firewall(c)){
+	if(lua_firewall(c)){
 		flagTransaction(c);
         addReplyErrorFormat(c,"cccdfaf command '%s'",
             (char*)c->argv[0]->ptr);
