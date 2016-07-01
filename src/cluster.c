@@ -3062,6 +3062,8 @@ void clusterHandleManualFailover(void) {
 void clusterCron(void) {
     dictIterator *di;
     dictEntry *de;
+	dictIterator *di1;
+    dictEntry *de1;
     int update_state = 0;
     int orphaned_masters; /* How many masters there are without ok slaves. */
     int max_slaves; /* Max number of ok slaves for a single master. */
@@ -3297,6 +3299,27 @@ void clusterCron(void) {
 
     if (update_state || server.cluster->state == REDIS_CLUSTER_FAIL)
         clusterUpdateState();
+
+	/*di =dictGetSafeIterator(server.cluster->nodes);
+	while((de = dictNext(di)) != NULL) {
+		clusterNode *node = dictGetVal(de);
+		if (node->flags &
+				  (REDIS_NODE_MYSELF|REDIS_NODE_NOADDR|REDIS_NODE_HANDSHAKE))
+					  continue;
+		di1 = dictGetSafeIterator(node->slaves);
+		while(de1 = dictNext(di1))!= NULL){
+			clusterNode *node = dictGetVal(de1);
+			if (node->flags &
+				  (REDIS_NODE_MYSELF|REDIS_NODE_NOADDR|REDIS_NODE_HANDSHAKE))
+					  continue;
+			node->slaves
+			
+		}
+		dictReleaseIterator(di1);
+		
+	}
+	
+	dictReleaseIterator(di);*/
 }
 
 /* This function is called before the event handler returns to sleep for
@@ -5000,7 +5023,6 @@ clusterNode *getNodeByQuery(redisClient *c, struct redisCommand *cmd, robj **arg
         mc.argc = argc;
         mc.cmd = cmd;
     }
-
     /* Check that all the keys are in the same hash slot, and obtain this
      * slot and the node associated. */
     for (i = 0; i < ms->count; i++) {
@@ -5128,6 +5150,14 @@ clusterNode *getNodeByQuery(redisClient *c, struct redisCommand *cmd, robj **arg
         return myself;
     }
 
+	if(c->flags & REDIS_READONLY &&
+        cmd->flags & REDIS_CMD_READONLY &&
+        nodeIsSlave(myself) &&
+        myself->slaveof != n)
+	{
+		if(n.numslaves > 0)
+			return n.slaves[0];
+	}
     /* Base case: just return the right node. However if this node is not
      * myself, set error_code to MOVED since we need to issue a rediretion. */
     if (n != myself && error_code) *error_code = REDIS_CLUSTER_REDIR_MOVED;
